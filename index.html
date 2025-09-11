@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tiny Timecard</title>
+  <style>
+    :root{
+      --bg:#0b0c10; --card:#12141a; --muted:#a7b0c0; --text:#eaf0ff; --accent:#6cf; --danger:#ff6b6b; --ok:#7bffb1; --border:#222733;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;height:100%;background:linear-gradient(180deg,#0b0c10,#0f1220);color:var(--text);font:16px/1.45 system-ui,Segoe UI,Roboto,Inter,Arial}
+    .wrap{max-width:980px;margin:40px auto;padding:0 16px}
+    header{display:flex;gap:14px;align-items:center;justify-content:space-between;margin-bottom:18px}
+    h1{font-size: clamp(22px, 2.8vw, 32px); margin:0; letter-spacing:.2px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+    label{font-size:14px;color:var(--muted)}
+    input[type="text"], select{background:#0c0f18;color:var(--text);border:1px solid var(--border);border-radius:12px;padding:12px 14px;min-width:220px;outline:none}
+    input[type="text"]:focus, select:focus{border-color:var(--accent)}
+
+    .timer{font-variant-numeric:tabular-nums; font-size: clamp(28px, 5vw, 48px); font-weight:700; letter-spacing: .5px}
+    .sub{color:var(--muted);font-size: 12.5px}
+
+    .btn{appearance:none;border:1px solid var(--border);background:#0e1220;color:var(--text);padding:12px 16px;border-radius:12px;font-weight:600;cursor:pointer;transition:.18s transform ease, .18s background ease, .18s border-color ease}
+    .btn:hover{transform:translateY(-1px);border-color:#2f3748}
+    .btn:active{transform:translateY(0)}
+    .btn.primary{background:linear-gradient(135deg,var(--accent),#5ad);color:#00131d;border:none}
+    .btn.primary.stop{background:linear-gradient(135deg,var(--danger),#f99);color:#240000}
+    .btn.ghost{background:transparent}
+    .actions{display:flex;gap:10px;flex-wrap:wrap}
+
+    table{width:100%;border-collapse:collapse;margin-top:14px}
+    th,td{padding:10px 8px;text-align:left;border-bottom:1px dashed #1e2330; font-variant-numeric: tabular-nums; vertical-align: top}
+    th{color:var(--muted);font-weight:600}
+    tbody tr:hover{background:#0e1220}
+
+    .totals{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
+    .pill{display:inline-flex;align-items:center;gap:8px;background:rgba(108,255,255,.08);border:1px solid #273445;border-radius:999px;padding:8px 12px}
+
+    footer{margin:28px 0;color:var(--muted);font-size:12px}
+    .hint{opacity:.9}
+    .danger{color:var(--danger)}
+    .ok{color:var(--ok)}
+    .note{white-space:pre-wrap;max-width:38ch}
+    .tiny{font-size:12px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>⏱️ Tiny Timecard</h1>
+      <div class="sub">Multi‑task + notes. Works offline. Data stays in your browser.</div>
+    </header>
+
+    <section class="card">
+      <div class="row" style="justify-content:space-between; gap:16px">
+        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap">
+          <label for="task">Task</label>
+          <select id="task"></select>
+          <button id="add-task" class="btn">➕ New Task</button>
+          <button id="rename-task" class="btn ghost">✏️ Rename</button>
+          <button id="delete-task" class="btn ghost danger" title="Delete current task">🗑 Delete</button>
+          <span class="pill"><span>Elapsed</span> <strong id="live">00:00:00</strong></span>
+        </div>
+        <div class="actions">
+          <button id="toggle" class="btn primary">▶️ Clock In</button>
+          <button id="add-split" class="btn" title="End current slice and start a new one">🔀 Split</button>
+          <button id="reset" class="btn ghost" title="Clear entries but keep task">♻️ Clear Entries</button>
+          <button id="export" class="btn">⬇️ Export CSV</button>
+        </div>
+      </div>
+
+      <table aria-label="Time entries table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Start</th>
+            <th>End</th>
+            <th>Duration</th>
+            <th>Note <span class="tiny">(click to edit)</span></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+
+      <div class="totals">
+        <div class="hint">Tip: Use <kbd>Space</kbd> to start/stop. On stop you can add a note.</div>
+        <div>
+          <span class="sub">Total</span>
+          <span class="timer" id="total">0:00</span>
+          <span class="sub" id="decimal">(0.00h)</span>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      No accounts, no trackers. Export per‑task CSV.
+    </footer>
+  </div>
+
+  <script>
+    // -------------------- State & Migration --------------------
+    const state = {
+      tasks: [], // [{id, name, entries:[{start,end,dur,note}], running, startTs}]
+      currentTaskId: null
+    };
+
+    const els = {
+      taskSel: document.getElementById('task'),
+      addTask: document.getElementById('add-task'),
+      renameTask: document.getElementById('rename-task'),
+      deleteTask: document.getElementById('delete-task'),
+      live: document.getElementById('live'),
+      total: document.getElementById('total'),
+      decimal: document.getElementById('decimal'),
+      toggle: document.getElementById('toggle'),
+      addSplit: document.getElementById('add-split'),
+      reset: document.getElementById('reset'),
+      exportBtn: document.getElementById('export'),
+      tbody: document.getElementById('tbody')
+    };
+
+    let tickHandle = null;
+
+    const pad = n => String(n).padStart(2,'0');
+    const fmtClock = (ms)=>{ const s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60; return `${pad(h)}:${pad(m)}:${pad(sec)}`; };
+    const fmtShort = (ms)=>{ const s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.round((s%3600)/60); return `${h}:${String(m).padStart(2,'0')}`; };
+    const fmtDecimal = (ms)=> (ms/1000/60/60).toFixed(2)+"h";
+    const fmtTime = (ts)=>{ const d=new Date(ts); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+" "+pad(d.getHours())+":"+pad(d.getMinutes()); };
+
+    function save(){ localStorage.setItem('tiny-timecard-v2', JSON.stringify(state)); }
+
+    function migrateIfNeeded(){
+      // v2 uses tasks; migrate from v1 single task if present
+      const v2 = localStorage.getItem('tiny-timecard-v2');
+      if(v2){ try{ Object.assign(state, JSON.parse(v2)); return; }catch(e){} }
+      const v1raw = localStorage.getItem('tiny-timecard');
+      if(v1raw){
+        try{
+          const v1 = JSON.parse(v1raw);
+          const task = {
+            id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+            name: v1.taskName || 'Task 1',
+            entries: (v1.entries||[]).map(e=>({...e, note:''})),
+            running: !!v1.running,
+            startTs: v1.startTs || null
+          };
+          state.tasks = [task];
+          state.currentTaskId = task.id;
+          save();
+        }catch(e){
+          // fresh start
+        }
+      }
+      if(state.tasks.length===0){
+        const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+        state.tasks = [{id, name:'Task 1', entries:[], running:false, startTs:null}];
+        state.currentTaskId = id;
+        save();
+      }
+    }
+
+    function currentTask(){ return state.tasks.find(t=>t.id===state.currentTaskId); }
+
+    // -------------------- Rendering --------------------
+    function renderTaskSelector(){
+      els.taskSel.innerHTML = '';
+      state.tasks.forEach(t=>{
+        const opt = document.createElement('option');
+        opt.value = t.id; opt.textContent = t.name; if(t.id===state.currentTaskId) opt.selected=true; els.taskSel.appendChild(opt);
+      });
+    }
+
+    function render(){
+      renderTaskSelector();
+      const task = currentTask();
+      const liveMs = task.running && task.startTs ? Date.now()-task.startTs : 0;
+      els.live.textContent = fmtClock(liveMs);
+      els.toggle.textContent = task.running ? '⏹️ Clock Out' : '▶️ Clock In';
+      els.toggle.classList.toggle('stop', task.running);
+
+      // table
+      els.tbody.innerHTML = '';
+      task.entries.forEach((e,i)=>{
+        const tr = document.createElement('tr');
+        const note = e.note || '';
+        tr.innerHTML = `
+          <td>${i+1}</td>
+          <td>${fmtTime(e.start)}</td>
+          <td>${fmtTime(e.end)}</td>
+          <td>${fmtClock(e.dur)} <span class="tiny">(${fmtDecimal(e.dur)})</span></td>
+          <td class="note" data-idx="${i}">${note ? note.replace(/</g,'&lt;') : '<span class="tiny">(add note)</span>'}</td>
+        `;
+        els.tbody.appendChild(tr);
+      });
+
+      const totalMs = task.entries.reduce((a,b)=>a+b.dur,0) + liveMs;
+      els.total.textContent = fmtShort(totalMs);
+      els.decimal.textContent = `(${fmtDecimal(totalMs)})`;
+    }
+
+    // -------------------- Timer ops (per task) --------------------
+    function start(){
+      const t = currentTask();
+      if(t.running) return;
+      // stop any other running task
+      state.tasks.forEach(task=>{
+        if(task.running){
+          const end = Date.now();
+          const dur = end - task.startTs;
+          task.entries.push({start: task.startTs, end, dur, note:''});
+          task.running = false; task.startTs = null;
+        }
+      });
+      const now = Date.now();
+      t.running = true; t.startTs = now;
+      save();
+      tickHandle && clearInterval(tickHandle);
+      tickHandle = setInterval(()=>{
+        const liveMs = Date.now() - t.startTs;
+        els.live.textContent = fmtClock(liveMs);
+        const totalMs = t.entries.reduce((a,b)=>a+b.dur,0) + liveMs;
+        els.total.textContent = fmtShort(totalMs);
+        els.decimal.textContent = `(${fmtDecimal(totalMs)})`;
+      },250);
+      render();
+    }
+
+    function stop(withPrompt=true){
+      const t = currentTask();
+      if(!t.running) return;
+      const end = Date.now();
+      const dur = end - t.startTs;
+      let note = '';
+      if(withPrompt){
+        note = prompt('Add a note for this entry (optional):','') || '';
+      }
+      t.entries.push({start:t.startTs, end, dur, note});
+      t.running = false; t.startTs = null;
+      clearInterval(tickHandle); tickHandle=null;
+      save();
+      render();
+    }
+
+    function split(){
+      const t = currentTask();
+      if(!t.running){ start(); return; }
+      const end = Date.now();
+      const dur = end - t.startTs;
+      t.entries.push({start:t.startTs, end, dur, note:''});
+      t.startTs = Date.now();
+      save();
+      render();
+    }
+
+    function clearEntries(){
+      const t = currentTask();
+      if(!confirm(`Clear all entries for \"${t.name}\"?`)) return;
+      t.entries = [];
+      t.startTs = t.running ? Date.now() : null;
+      save();
+      render();
+    }
+
+    function exportCSV(){
+      const t = currentTask();
+      const header = ['Task','Start','End','Duration(hh:mm:ss)','Duration(ms)','Duration(decimal)','Note'];
+      const rows = t.entries.map(e=>[
+        t.name,
+        new Date(e.start).toISOString(),
+        new Date(e.end).toISOString(),
+        fmtClock(e.dur),
+        e.dur,
+        (e.dur/1000/60/60).toFixed(2),
+        (e.note||'')
+      ]);
+      const totalMs = t.entries.reduce((a,b)=>a+b.dur,0);
+      rows.push(['TOTAL','','',fmtClock(totalMs), totalMs, (totalMs/1000/60/60).toFixed(2), '']);
+      const csv = [header, ...rows].map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], {type:'text/csv'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      const name = t.name.replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase();
+      a.download = `${name||'timecard'}-${new Date().toISOString().slice(0,10)}.csv`;
+      a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    // -------------------- Task ops --------------------
+    function addTask(){
+      const name = prompt('New task name:','New Task');
+      if(!name) return;
+      const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random());
+      state.tasks.push({id, name, entries:[], running:false, startTs:null});
+      state.currentTaskId = id; save(); render();
+    }
+    function renameTask(){
+      const t = currentTask();
+      const name = prompt('Rename task:', t.name);
+      if(!name) return;
+      t.name = name; save(); render();
+    }
+    function deleteTask(){
+      const t = currentTask();
+      if(!confirm(`Delete task \"${t.name}\" and all its entries?`)) return;
+      const idx = state.tasks.findIndex(x=>x.id===t.id);
+      state.tasks.splice(idx,1);
+      if(state.tasks.length===0){ addTask(); }
+      state.currentTaskId = state.tasks[0].id; save(); render();
+    }
+
+    // -------------------- Events --------------------
+    els.toggle.addEventListener('click', ()=> currentTask().running ? stop(true) : start());
+    els.addSplit.addEventListener('click', split);
+    els.reset.addEventListener('click', clearEntries);
+    els.exportBtn.addEventListener('click', exportCSV);
+    els.taskSel.addEventListener('change', (e)=>{ state.currentTaskId = e.target.value; save(); render(); });
+    els.addTask.addEventListener('click', addTask);
+    els.renameTask.addEventListener('click', renameTask);
+    els.deleteTask.addEventListener('click', deleteTask);
+
+    // Click-to-edit note
+    els.tbody.addEventListener('click', (e)=>{
+      const cell = e.target.closest('td.note');
+      if(!cell) return;
+      const idx = Number(cell.dataset.idx);
+      const t = currentTask();
+      const newNote = prompt('Edit note:', t.entries[idx].note || '') || t.entries[idx].note || '';
+      t.entries[idx].note = newNote;
+      save(); render();
+    });
+
+    // Spacebar toggle on current task
+    window.addEventListener('keydown', (e)=>{
+      if(e.code === 'Space' && !/input|textarea|select/i.test(e.target.tagName)){
+        e.preventDefault();
+        currentTask().running ? stop(true) : start();
+      }
+    });
+
+    // -------------------- Init --------------------
+    migrateIfNeeded();
+    const t = currentTask();
+    if(t && t.running && t.startTs){
+      tickHandle = setInterval(()=>{
+        const liveMs = Date.now() - t.startTs;
+        els.live.textContent = fmtClock(liveMs);
+        const totalMs = t.entries.reduce((a,b)=>a+b.dur,0) + liveMs;
+        els.total.textContent = fmtShort(totalMs);
+        els.decimal.textContent = `(${fmtDecimal(totalMs)})`;
+      },250);
+    }
+    render();
+  </script>
+</body>
+</html>

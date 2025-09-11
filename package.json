@@ -1,0 +1,19 @@
+{
+  "name": "tiny-timecard",
+  "version": "1.0.0",
+  "description": "Single-file timecard app (Electron + PWA).",
+  "author": "Corrine",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^32.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.corrine.tinytimecard",
+    "win": { "target": "nsis", "icon": "icons/icon-512.png" }
+  }
+}
